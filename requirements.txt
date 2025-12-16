@@ -1,4 +1,4 @@
 flask
 geopy
-swisseph
+pyswisseph
 gunicorn
