@@ -7,9 +7,7 @@ import unicodedata
 
 app = Flask(__name__)
 
-# ============================================================
-# FUNÇÕES ÚTEIS
-# ============================================================
+
 
 def remover_acentos(txt):
     if not isinstance(txt, str):
@@ -105,9 +103,7 @@ def calcular_aspectos(planetas_dict):
     return resultado
 
 
-# ============================================================
-# ENDPOINT PRINCIPAL
-# ============================================================
+
 
 @app.route("/mapa", methods=["POST"])
 def mapa():
@@ -134,9 +130,7 @@ def mapa():
         jd = swe.julday(dt.year, dt.month, dt.day,
                         dt.hour + dt.minute / 60)
 
-        # ============================================================
-        # PLANETAS
-        # ============================================================
+        
         planetas_lista = {
             "Sol": swe.SUN,
             "Lua": swe.MOON,
@@ -166,9 +160,7 @@ def mapa():
                 "retrógrado": pos[3] < 0
             }
 
-        # ============================================================
-        # CASAS
-        # ============================================================
+        
         casas_raw, asc_mc = swe.houses(jd, lat, lon)
         asc, mc = asc_mc[0], asc_mc[1]
 
@@ -180,14 +172,10 @@ def mapa():
                 "signo": signo_from_grau(grau)
             }
 
-        # ============================================================
-        # ASPECTOS
-        # ============================================================
+        
         aspectos = calcular_aspectos(planetas)
 
-        # ============================================================
-        # RETORNO FINAL
-        # ============================================================
+        
         return jsonify({
             "planetas": planetas,
             "casas": casas,
@@ -198,9 +186,7 @@ def mapa():
         return jsonify({"erro": f"Erro interno: {str(e)}"}), 500
 
 
-# ============================================================
-# EXECUÇÃO
-# ============================================================
+
 
 if __name__ == "__main__":
     app.run(debug=True)
