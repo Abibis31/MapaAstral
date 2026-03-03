@@ -1,51 +1,39 @@
 from flask import Flask, request, jsonify
-from geopy.geocoders import Nominatim
-from geopy.extra.rate_limiter import RateLimiter
 import swisseph as swe
 from datetime import datetime
 import unicodedata
 
 app = Flask(__name__)
 
+# ==========================================
+# CONFIGURAÇÃO
+# ==========================================
 
+swe.set_ephe_path('.')  # ajuste se usar arquivos ephemeris externos
+
+# Base simples de cidades (adicione mais conforme necessário)
+CIDADES = {
+    "Florianopolis": (-27.5954, -48.5480),
+    "Sao Paulo": (-23.5505, -46.6333),
+    "Rio de Janeiro": (-22.9068, -43.1729),
+    "Curitiba": (-25.4284, -49.2733),
+    "Porto Alegre": (-30.0346, -51.2177),
+    "Brasilia": (-15.7942, -47.8822)
+}
+
+# ==========================================
+# UTILITÁRIOS
+# ==========================================
 
 def remover_acentos(txt):
-    if not isinstance(txt, str):
-        return txt
-    return ''.join(c for c in unicodedata.normalize('NFD', txt)
-                   if unicodedata.category(c) != 'Mn')
+    return ''.join(
+        c for c in unicodedata.normalize('NFD', txt)
+        if unicodedata.category(c) != 'Mn'
+    )
 
-
-def corrigir_cidade(raw_city):
-    """
-    Tenta corrigir automaticamente a cidade digitada.
-    Remove acentos, tenta diferentes formatos e retorna
-    coordenadas se possível.
-    """
-    geolocator = Nominatim(user_agent="astrology_app", timeout=10)
-    geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1)
-
-    city = remover_acentos(raw_city).strip()
-
-    tentativas = [
-        city,
-        city + ", Brasil",
-        city + ", Brazil",
-        city.replace(" ", ""),
-        city.split("-")[0],
-        city.split(",")[0],
-    ]
-
-    for tentativa in tentativas:
-        try:
-            loc = geocode(tentativa)
-            if loc:
-                return loc.latitude, loc.longitude
-        except:
-            pass
-
-    return None, None
-
+def buscar_cidade(nome):
+    nome = remover_acentos(nome).strip()
+    return CIDADES.get(nome)
 
 def signo_from_grau(grau):
     signos = [
@@ -53,15 +41,10 @@ def signo_from_grau(grau):
         "Leão", "Virgem", "Libra", "Escorpião",
         "Sagitário", "Capricórnio", "Aquário", "Peixes"
     ]
-    index = int(grau // 30)
-    return signos[index]
+    return signos[int(grau // 30)]
 
-
-def calcular_aspectos(planetas_dict):
-    """
-    Calcula aspectos entre planetas usando orbes recomendados.
-    """
-    aspectos_principais = {
+def calcular_aspectos(planetas):
+    aspectos_base = {
         "conjunção": 0,
         "oposição": 180,
         "trígono": 120,
@@ -77,7 +60,7 @@ def calcular_aspectos(planetas_dict):
         "sextil": 6
     }
 
-    nomes = list(planetas_dict.keys())
+    nomes = list(planetas.keys())
     resultado = []
 
     for i in range(len(nomes)):
@@ -85,52 +68,78 @@ def calcular_aspectos(planetas_dict):
             p1 = nomes[i]
             p2 = nomes[j]
 
-            g1 = planetas_dict[p1]["grau"]
-            g2 = planetas_dict[p2]["grau"]
+            g1 = planetas[p1]["grau"]
+            g2 = planetas[p2]["grau"]
 
             diff = abs(g1 - g2)
             diff = min(diff, 360 - diff)
 
-            for asp, alvo in aspectos_principais.items():
-                if abs(diff - alvo) <= orbes[asp]:
+            for nome, grau_alvo in aspectos_base.items():
+                if abs(diff - grau_alvo) <= orbes[nome]:
                     resultado.append({
                         "planeta1": p1,
                         "planeta2": p2,
-                        "tipo": asp,
-                        "orb": round(abs(diff - alvo), 2)
+                        "tipo": nome,
+                        "orb": round(abs(diff - grau_alvo), 2)
                     })
 
     return resultado
 
-
-
+# ==========================================
+# ROTA PRINCIPAL
+# ==========================================
 
 @app.route("/mapa", methods=["POST"])
 def mapa():
+
     try:
-        data = request.json.get("data")
-        hora = request.json.get("hora")
-        cidade = request.json.get("cidade")
+        dados = request.json
 
-        if not data or not hora or not cidade:
-            return jsonify({"erro": "Envie data, hora e cidade."}), 400
+        data = dados.get("data")
+        hora = dados.get("hora")
+        latitude = dados.get("latitude")
+        longitude = dados.get("longitude")
+        cidade = dados.get("cidade")
 
-        # Converter data e hora
+        if not data or not hora:
+            return jsonify({"erro": "Envie data e hora."}), 400
+
+        # Conversão data/hora
         try:
             dt = datetime.strptime(f"{data} {hora}", "%Y-%m-%d %H:%M")
-        except ValueError:
-            return jsonify({"erro": "Formato de data/hora inválido. Use YYYY-MM-DD e HH:MM"}), 400
+        except:
+            return jsonify({"erro": "Formato inválido. Use YYYY-MM-DD e HH:MM"}), 400
 
-        # Corrigir cidade
-        lat, lon = corrigir_cidade(cidade)
-        if lat is None:
-            return jsonify({"erro": "Cidade não encontrada. Tente novamente."}), 400
+        # Coordenadas
+        if latitude and longitude:
+            lat = float(latitude)
+            lon = float(longitude)
 
-        # JULIAN DAY
+        elif cidade:
+            coords = buscar_cidade(cidade)
+            if not coords:
+                return jsonify({"erro": "Cidade não encontrada na base local."}), 400
+            lat, lon = coords
+
+        else:
+            return jsonify({"erro": "Envie latitude/longitude ou cidade."}), 400
+
+        # Julian Day
         jd = swe.julday(dt.year, dt.month, dt.day,
                         dt.hour + dt.minute / 60)
 
-        
+        # Casas
+        casas_raw, asc_mc = swe.houses(jd, lat, lon)
+
+        casas = {}
+        for i in range(12):
+            grau = casas_raw[i]
+            casas[str(i + 1)] = {
+                "grau": round(grau, 2),
+                "signo": signo_from_grau(grau)
+            }
+
+        # Planetas
         planetas_lista = {
             "Sol": swe.SUN,
             "Lua": swe.MOON,
@@ -149,44 +158,26 @@ def mapa():
         for nome, planeta in planetas_lista.items():
             pos, _ = swe.calc_ut(jd, planeta)
             grau = pos[0]
-            signo = signo_from_grau(grau)
-            casas = swe.houses(jd, lat, lon)[0]
-            casa = sum(grau >= h for h in casas) or 12
 
             planetas[nome] = {
-                "signo": signo,
                 "grau": round(grau, 2),
-                "casa": casa,
+                "signo": signo_from_grau(grau),
                 "retrógrado": pos[3] < 0
             }
 
-        
-        casas_raw, asc_mc = swe.houses(jd, lat, lon)
-        asc, mc = asc_mc[0], asc_mc[1]
-
-        casas = {}
-        for i in range(12):
-            grau = casas_raw[i]
-            casas[str(i + 1)] = {
-                "grau": round(grau, 2),
-                "signo": signo_from_grau(grau)
-            }
-
-        
         aspectos = calcular_aspectos(planetas)
 
-        
         return jsonify({
+            "latitude": lat,
+            "longitude": lon,
             "planetas": planetas,
             "casas": casas,
             "aspectos": aspectos
         })
 
     except Exception as e:
-        return jsonify({"erro": f"Erro interno: {str(e)}"}), 500
-
-
+        return jsonify({"erro": str(e)}), 500
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run()
